@@ -33,14 +33,16 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      - uses: android-actions/setup-android@v3
-
       - name: Install free Android SDK dependencies
-        run: yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager "platform-tools" "build-tools;35.0.1" "platforms;android-35" "cmdline-tools;latest" "ndk;28.1.13356709" "cmake;3.10.2.4988404"
+        run: |
+          echo "Android SDK: $ANDROID_HOME"
+          command -v sdkmanager
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platform-tools" "build-tools;35.0.1" "platforms;android-35"
 
       - name: Download official Godot 4.5.2 editor and export templates
-        run: mkdir -p "$GITHUB_WORKSPACE/godot-bin" "$HOME/.local/share/godot/export_templates/4.5.2.stable"
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/godot-bin" "$HOME/.local/share/godot/export_templates/4.5.2.stable"
           curl --fail -L --retry 3 -o /tmp/godot.zip https://github.com/godotengine/godot/releases/download/4.5.2-stable/Godot_v4.5.2-stable_linux.x86_64.zip
           unzip -q /tmp/godot.zip -d "$GITHUB_WORKSPACE/godot-bin"
           chmod +x "$GITHUB_WORKSPACE/godot-bin/Godot_v4.5.2-stable_linux.x86_64"
@@ -50,12 +52,13 @@ jobs:
           cp -R /tmp/templates-unpacked/templates/. "$HOME/.local/share/godot/export_templates/4.5.2.stable/"
 
       - name: Generate a local debug signing key
-        run: mkdir -p "$HOME/.android"
+        run: |
+          mkdir -p "$HOME/.android"
           keytool -genkeypair -keystore "$HOME/.android/debug.keystore" -storepass android -keypass android -alias androiddebugkey -keyalg RSA -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
 
       - name: Import resources and export debug APK
         env:
-          GODOT_ANDROID_KEYSTORE_DEBUG_PATH: "${{ github.workspace }}/.android/debug.keystore"
+          GODOT_ANDROID_KEYSTORE_DEBUG_PATH: "{{ github.workspace }}/.android/debug.keystore"
           GODOT_ANDROID_KEYSTORE_DEBUG_USER: androiddebugkey
           GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD: android
         run: |
