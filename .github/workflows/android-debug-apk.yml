@@ -14,18 +14,33 @@ jobs:
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
+
+      - name: Move assets into godot/assets for APK build
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/godot/assets"
+          if [ -f "$GITHUB_WORKSPACE/icon.png" ]; then
+            mv "$GITHUB_WORKSPACE/icon.png" "$GITHUB_WORKSPACE/godot/assets/icon.png"
+          fi
+          if [ -f "$GITHUB_WORKSPACE/coin.wav" ]; then
+            mv "$GITHUB_WORKSPACE/coin.wav" "$GITHUB_WORKSPACE/godot/assets/coin.wav"
+          fi
+          if [ -f "$GITHUB_WORKSPACE/happy_loop.wav" ]; then
+            mv "$GITHUB_WORKSPACE/happy_loop.wav" "$GITHUB_WORKSPACE/godot/assets/happy_loop.wav"
+          fi
+
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: 17
+
       - uses: android-actions/setup-android@v3
+
       - name: Install free Android SDK dependencies
-        run: |
-          yes | sdkmanager --licenses >/dev/null || true
+        run: yes | sdkmanager --licenses >/dev/null || true
           sdkmanager "platform-tools" "build-tools;35.0.1" "platforms;android-35" "cmdline-tools;latest" "ndk;28.1.13356709" "cmake;3.10.2.4988404"
+
       - name: Download official Godot 4.5.2 editor and export templates
-        run: |
-          mkdir -p "$GITHUB_WORKSPACE/godot-bin" "$HOME/.local/share/godot/export_templates/4.5.2.stable"
+        run: mkdir -p "$GITHUB_WORKSPACE/godot-bin" "$HOME/.local/share/godot/export_templates/4.5.2.stable"
           curl --fail -L --retry 3 -o /tmp/godot.zip https://github.com/godotengine/godot/releases/download/4.5.2-stable/Godot_v4.5.2-stable_linux.x86_64.zip
           unzip -q /tmp/godot.zip -d "$GITHUB_WORKSPACE/godot-bin"
           chmod +x "$GITHUB_WORKSPACE/godot-bin/Godot_v4.5.2-stable_linux.x86_64"
@@ -33,13 +48,14 @@ jobs:
           mkdir -p /tmp/templates-unpacked
           unzip -q /tmp/templates.tpz -d /tmp/templates-unpacked
           cp -R /tmp/templates-unpacked/templates/. "$HOME/.local/share/godot/export_templates/4.5.2.stable/"
+
       - name: Generate a local debug signing key
-        run: |
-          mkdir -p "$HOME/.android"
+        run: mkdir -p "$HOME/.android"
           keytool -genkeypair -keystore "$HOME/.android/debug.keystore" -storepass android -keypass android -alias androiddebugkey -keyalg RSA -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+
       - name: Import resources and export debug APK
         env:
-          GODOT_ANDROID_KEYSTORE_DEBUG_PATH: ${{ github.workspace }}/.android/debug.keystore
+          GODOT_ANDROID_KEYSTORE_DEBUG_PATH: "${{ github.workspace }}/.android/debug.keystore"
           GODOT_ANDROID_KEYSTORE_DEBUG_USER: androiddebugkey
           GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD: android
         run: |
@@ -49,6 +65,7 @@ jobs:
           "$GITHUB_WORKSPACE/godot-bin/Godot_v4.5.2-stable_linux.x86_64" --headless --path "$GITHUB_WORKSPACE/godot" --editor --quit
           "$GITHUB_WORKSPACE/godot-bin/Godot_v4.5.2-stable_linux.x86_64" --headless --path "$GITHUB_WORKSPACE/godot" --export-debug Android "$GITHUB_WORKSPACE/build/WonderWorld3D-debug.apk"
           test -s "$GITHUB_WORKSPACE/build/WonderWorld3D-debug.apk"
+
       - uses: actions/upload-artifact@v4
         with:
           name: WonderWorld3D-Android-debug-APK
