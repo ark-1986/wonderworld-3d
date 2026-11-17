@@ -74,7 +74,7 @@ func _physics_process(delta: float) -> void:
 
 func _process(delta: float) -> void:
 	if playing and local_player != null:
-		var desired := local_player.global_position + Vector3(0, 6.2, 10.8)
+		var desired: Vector3= local_player.global_position + Vector3(0, 6.2, 10.8)
 		camera.global_position = camera.global_position.lerp(desired, minf(1.0, delta * 5.0))
 		camera.look_at(local_player.global_position + Vector3(0, 0.9, 0))
 	else:
