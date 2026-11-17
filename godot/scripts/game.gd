@@ -959,6 +959,9 @@ func _use_zone_action() -> void:
 	if not playing or local_player == null:
 		return
 	var near: String = world_activities.prompt_at(local_player.global_position)
+	if near == "OPEN STORE":
+		_open_store()
+		return
 	if near == "FOAM TAG":
 		_on_battle_pressed()
 		return
