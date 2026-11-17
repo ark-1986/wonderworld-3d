@@ -1,0 +1,29 @@
+name: Download pinned offline WebGL engine for WonderWorld
+on:
+  push:
+    paths:
+      - '.github/workflows/download-offline-three.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  engine:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Download MIT licensed pinned Three.js build
+        shell: bash
+        run: |
+          set -euxo pipefail
+          curl -fL --retry 3 -o three.min.js "https://cdnjs.cloudflare.com/ajax/libs/three.js/0.160.1/three.min.js"
+          test "$(wc -c < three.min.js)" -gt 300000
+          grep -q "THREE" three.min.js
+          printf 'Three.js 0.160.1 - MIT license. Copyright (c) 2010-2023 three.js authors.\nSource: https://github.com/mrdoob/three.js\n' > THREE-LICENSE.txt
+          sha256sum three.min.js
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wonderworld-offline-threejs-engine
+          path: |
+            three.min.js
+            THREE-LICENSE.txt
+          retention-days: 7
