@@ -7,6 +7,8 @@ const NetworkScript = preload("res://scripts/network.gd")
 const JoystickScript = preload("res://scripts/virtual_joystick.gd")
 const CityWorldScript = preload("res://scripts/wonder_city.gd")
 const MiniMapScript = preload("res://scripts/city_minimap.gd")
+const WorldActivitiesScript = preload("res://scripts/world_activities.gd")
+const ShopScript = preload("res://scripts/wonder_shop.gd")
 const ALIASES: Array[String] = ["Sunny", "Rocket", "Pixel", "Comet", "Star", "Sprout", "Bubbles", "Nova"]
 const COIN_POSITIONS: Array[Vector3] = [
 	Vector3(0, 1.15, 6), Vector3(5, 1.15, 1), Vector3(-5, 1.15, 1),
@@ -70,6 +72,9 @@ var slide_reuse_timer: float = 0.0
 var slide_count: int = 0
 const RACE_GATES = [Vector2(20,17), Vector2(44,17), Vector2(44,35), Vector2(20,35), Vector2(20,17)]
 var district_label: Label
+var world_activities: Node3D
+var shop: CanvasLayer
+var battle_button: Button
 var district_timer: float = 0.0
 var districts_seen: Dictionary = {}
 var travel_index: int = 0
@@ -116,7 +121,7 @@ func _physics_process(delta: float) -> void:
 	var is_jump := jump_requested or Input.is_action_just_pressed("jump")
 	jump_requested = false
 	# Do not send old location while the server is confirming fast travel.
-	if travel_pending:
+	if travel_pending or (world_activities != null and world_activities.is_riding()):
 		return
 	local_player.control_move(axis, is_jump, delta)
 	if multiplayer_mode and network.connected:
@@ -267,6 +272,11 @@ func _build_world() -> void:
 	add_child(city_world)
 	for id in COIN_POSITIONS.size():
 		_add_coin(id, COIN_POSITIONS[id])
+	world_activities = WorldActivitiesScript.new()
+	world_activities.name = "WonderWorldActivities"
+	add_child(world_activities)
+	world_activities.activity_finished.connect(_on_activity_finished)
+	world_activities.battle_finished.connect(_on_battle_finished)
 
 func _add_coin(id: int, pos: Vector3) -> void:
 	var area := Area3D.new()
@@ -410,7 +420,7 @@ func _build_interface() -> void:
 	menu_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	menu_status.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	stack.add_child(menu_status)
-	var note := _label("Private codes • No open chat • No purchases", 13, Color("88aac3"))
+	var note := _label("Private codes • No open chat • No real-money purchases", 13, Color("88aac3"))
 	note.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	stack.add_child(note)
 	
@@ -552,6 +562,19 @@ func _build_interface() -> void:
 	action_button.offset_bottom = -151
 	action_button.pressed.connect(_use_zone_action)
 	hud.add_child(action_button)
+	var shop_button := _button("SHOP", Color("ae77b2"))
+	shop_button.position = Vector2(22, 337)
+	shop_button.custom_minimum_size = Vector2(150, 46)
+	shop_button.pressed.connect(_open_store)
+	hud.add_child(shop_button)
+	battle_button = _button("BATTLE", Color("e39752"))
+	battle_button.position = Vector2(22, 395)
+	battle_button.custom_minimum_size = Vector2(150, 46)
+	battle_button.pressed.connect(_on_battle_pressed)
+	hud.add_child(battle_button)
+	shop = ShopScript.new()
+	shop.controller = self
+	add_child(shop)
 	_update_hud()
 
 func _style(color: Color, radius: int, border_color: Color = Color.TRANSPARENT, border: int = 0) -> StyleBoxFlat:
@@ -646,7 +669,7 @@ func _start_play(is_multi: bool, code: String) -> void:
 	pending_travel_stop = -1
 	friends_panel.visible = is_multi
 	room_copy_button.visible = is_multi
-	current_score = 0
+	current_score = shop.get_wallet() if not is_multi else 0
 	districts_seen.clear()
 	pet_enabled = false
 	car_enabled = false
@@ -656,6 +679,10 @@ func _start_play(is_multi: bool, code: String) -> void:
 	slide_count = 0
 	slide_reuse_timer = 0.0
 	last_zone_name = ""
+	world_activities.reset_player()
+	if battle_button != null:
+		battle_button.text = "BATTLE"
+	shop.hide_shop()
 	pending_coins.clear()
 	scores.clear()
 	for peer in players.values():
@@ -678,6 +705,8 @@ func _start_play(is_multi: bool, code: String) -> void:
 		ride_shell.queue_free()
 	ride_shell = _make_ride_shell()
 	ride_shell.visible = false
+	world_activities.watch_player = local_player
+	shop.apply_equipment()
 	pet_button.text = "PET"
 	car_button.text = "DRIVE"
 	move_timer = 0.0
@@ -721,6 +750,9 @@ func _back_to_menu() -> void:
 	network.disconnect_room()
 	playing = false
 	multiplayer_mode = false
+	shop.hide_shop()
+	world_activities.reset_player()
+	world_activities.watch_player = null
 	active_room = ""
 	travel_pending = false
 	pending_travel_stop = -1
@@ -852,6 +884,8 @@ func _network_message(data: Dictionary) -> void:
 func _update_hud() -> void:
 	if hud_score == null:
 		return
+	if playing and not multiplayer_mode and shop != null:
+		shop.persist_wallet(current_score)
 	hud_score.text = "✦ %d POINTS" % current_score
 	if quest_label != null:
 		quest_label.text = "DISCOVER THE CITY  •  %d/5 ZONES" % districts_seen.size()
@@ -899,6 +933,10 @@ func _update_districts() -> void:
 				action_button.text = "OBBY"
 			_:
 				action_button.text = "QUEST"
+	if world_activities != null and action_button != null:
+		var nearby_action: String = world_activities.prompt_at(local_player.global_position)
+		if nearby_action != "":
+			action_button.text = nearby_action
 	last_zone_name = nearby
 
 func _check_race() -> void:
@@ -920,18 +958,24 @@ func _check_race() -> void:
 func _use_zone_action() -> void:
 	if not playing or local_player == null:
 		return
+	var near: String = world_activities.prompt_at(local_player.global_position)
+	if near == "FOAM TAG":
+		_on_battle_pressed()
+		return
+	if near != "":
+		if multiplayer_mode:
+			hud_status.text = "Interactive attractions currently work in offline practice."
+			return
+		var result: String = world_activities.use_nearby(local_player)
+		if result != "":
+			hud_status.text = result
+			return
 	match last_zone_name:
 		"SPLASH WATER PARK":
-			if slide_reuse_timer + 2.0 > Time.get_ticks_msec() * 0.001:
+			if multiplayer_mode:
+				hud_status.text = "The water slide is currently offline-only."
 				return
-			slide_reuse_timer = Time.get_ticks_msec() * 0.001
-			_request_travel_to(3)
-			slide_count += 1
-			if not multiplayer_mode:
-				current_score += 20
-				_play_coin_sound()
-				_update_hud()
-			hud_status.text = "SPLASH! Water slide completed • %d splashes" % slide_count
+			hud_status.text = world_activities.begin_slide(local_player)
 		"RACING CHALLENGE":
 			if not car_enabled:
 				_toggle_car()
@@ -1010,6 +1054,51 @@ func _toggle_car() -> void:
 	local_player.speed_multiplier = 1.65 if car_enabled else 1.0
 	car_button.text = "PARK" if car_enabled else "DRIVE"
 	hud_status.text = "Driving! Explore the raceway at the eastern side." if car_enabled else "Back on foot."
+
+func _open_store() -> void:
+	if shop != null:
+		shop.open_shop()
+
+func _on_battle_pressed() -> void:
+	if not playing or local_player == null:
+		return
+	if multiplayer_mode:
+		hud_status.text = "Foam-tag practice is offline-only until anti-cheat is ready."
+		return
+	var message: String = world_activities.start_or_tag(local_player)
+	hud_status.text = message
+	if message.begins_with("HIT!"):
+		current_score += 8
+		_play_coin_sound()
+		_update_hud()
+	battle_button.text = "TAG!" if world_activities.battle_active else "BATTLE"
+
+func _on_activity_finished(activity: String) -> void:
+	if not playing or multiplayer_mode:
+		return
+	if activity == "slide":
+		slide_count += 1
+		current_score += 20
+		hud_status.text = "SPLASH! Finished the water slide • +20 points"
+	elif activity == "swing":
+		current_score += 8
+		hud_status.text = "Swing ride finished! +8 points"
+	_play_coin_sound()
+	_update_hud()
+
+func _on_battle_finished(hits: int) -> void:
+	if not playing or multiplayer_mode:
+		return
+	battle_button.text = "BATTLE"
+	if hits >= 6:
+		current_score += 60
+		hud_status.text = "FOAM TAG CHAMPION! %d hits • +60 bonus" % hits
+	elif hits > 0:
+		current_score += 10
+		hud_status.text = "Foam-tag round complete! %d hits • +10 bonus" % hits
+	else:
+		hud_status.text = "Foam-tag round over. Try getting closer to the targets!"
+	_update_hud()
 
 func _start_music() -> void:
 	music_player = AudioStreamPlayer.new()
