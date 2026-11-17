@@ -1,4 +1,4 @@
-name: Build WonderWorld 3D Android APK
+name: Build WonderWorld Adventure City Android APK
 
 on:
   workflow_dispatch:
@@ -23,7 +23,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p godot/scenes godot/scripts godot/assets
-          for f in avatar.gd game.gd network.gd virtual_joystick.gd; do
+          for f in avatar.gd game.gd network.gd virtual_joystick.gd wonder_city.gd city_minimap.gd; do
             if [ -f "$f" ] && [ ! -f "godot/scripts/$f" ]; then
               mv "$f" "godot/scripts/$f"
             fi
@@ -33,9 +33,22 @@ jobs:
               mv "$f" "godot/assets/$f"
             fi
           done
-          for f in godot/project.godot godot/scenes/main.tscn godot/scripts/game.gd godot/scripts/avatar.gd godot/scripts/network.gd godot/scripts/virtual_joystick.gd godot/assets/icon.png godot/assets/coin.wav godot/assets/happy_loop.wav godot/export_presets.cfg; do
+          for f in godot/project.godot godot/scenes/main.tscn godot/scripts/game.gd godot/scripts/avatar.gd godot/scripts/network.gd godot/scripts/virtual_joystick.gd godot/scripts/wonder_city.gd godot/scripts/city_minimap.gd godot/assets/textures/grass.png godot/assets/textures/cobble.png godot/assets/textures/roof.png godot/assets/icon.png godot/assets/coin.wav godot/assets/happy_loop.wav godot/export_presets.cfg; do
             test -s "$f" || { echo "Missing required file: $f" >&2; exit 1; }
           done
+
+      - name: Validate source structure and original GLB assets
+        run: python3 tools/validate_release.py
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Smoke-test free multiplayer room server
+        working-directory: server
+        run: |
+          npm install --no-audit --no-fund
+          npm test
 
       - uses: actions/setup-java@v4
         with:
@@ -112,13 +125,38 @@ jobs:
             echo 'Godot reported a game-script error. See import log above.' >&2
             exit 1
           fi
+          echo 'Running native scene smoke test (no remote server needed)...'
+          "$GODOT" --headless --path "$GITHUB_WORKSPACE/godot" --quit-after 20 2>&1 | tee "$GITHUB_WORKSPACE/build/godot-runtime.log"
+          if grep -Eiq 'SCRIPT ERROR|Parse Error|Parser Error|Failed to load script' "$GITHUB_WORKSPACE/build/godot-runtime.log"; then
+            echo 'Godot scene failed runtime validation.' >&2
+            exit 1
+          fi
           "$GODOT" --headless --path "$GITHUB_WORKSPACE/godot" \
-            --export-debug Android "$GITHUB_WORKSPACE/build/WonderWorld3D-debug.apk"
-          test -s "$GITHUB_WORKSPACE/build/WonderWorld3D-debug.apk"
+            --export-debug Android "$GITHUB_WORKSPACE/build/WonderWorld-AdventureCity-v0.3.1.apk"
+          test -s "$GITHUB_WORKSPACE/build/WonderWorld-AdventureCity-v0.3.1.apk"
+
+      - name: Save import log when build fails
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: AdventureCity-Godot-Smoke-Diagnostics
+          path: build/godot-import.log
+          if-no-files-found: ignore
+          retention-days: 7
 
       - uses: actions/upload-artifact@v4
         with:
-          name: WonderWorld3D-Android-debug-APK
-          path: build/WonderWorld3D-debug.apk
+          name: WonderWorld-AdventureCity-v0.3.1-Android-APK
+          path: build/WonderWorld-AdventureCity-v0.3.1.apk
           if-no-files-found: error
+          retention-days: 7
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: WonderWorld3D-diagnostic-logs
+          path: |
+            build/godot-import.log
+            build/godot-runtime.log
+          if-no-files-found: ignore
           retention-days: 7
