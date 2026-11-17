@@ -33,7 +33,7 @@ jobs:
           distribution: temurin
           java-version: 17
 
-            - name: Install free Android SDK dependencies
+      - name: Install free Android SDK dependencies
         run: |
           set -euo pipefail
           echo "Android SDK: $ANDROID_HOME"
