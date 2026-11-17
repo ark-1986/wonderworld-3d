@@ -35,7 +35,7 @@ assert 'func _quick_travel()' in g and 'network.request_travel(stop)' in g and '
 n=(root/'scripts/network.gd').read_text()
 assert 'func request_travel(stop: int)' in n
 srv=(base/'server/src/index.ts').read_text()
-assert 'const WORLD_LIMIT = 56' in srv and 'TRAVEL_STOPS' in srv and 'msg.t === "travel"' in srv
+assert 'const WORLD_LIMIT = 64' in srv and 'TRAVEL_STOPS' in srv and 'msg.t === "travel"' in srv
 assert 'TRAVEL_STOPS' in g
 assert 'import_etc2_astc=true' in (root/'project.godot').read_text()
 assert 'architectures/arm64-v8a=true' in (root/'export_presets.cfg').read_text()
