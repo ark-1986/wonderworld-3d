@@ -33,6 +33,7 @@ func _ready() -> void:
 	_build_swing(Vector3(-41, 0, 15), Color("f2a965"))
 	_build_swing(Vector3(-33, 0, 13), Color("69cfc3"))
 	_build_arena()
+	_build_shopfront()
 
 func _material(color: Color) -> StandardMaterial3D:
 	var key: String = color.to_html()
@@ -160,7 +161,19 @@ func _build_swing(where: Vector3, color: Color) -> void:
 		_post(pivot, Vector3(side, -1.30, 0), 2.6, Color("f1e4bf"), 0.035)
 	_box(pivot, Vector3(0, -2.66, 0), Vector3(1.85, 0.20, 0.88), color)
 	_sign(root, "SWING • RIDE", Vector3(0, 5.5, 0), Color("fff7c2"))
-	swings.append({"root":root, "pivot":pivot, "where":where})
+	swings.append({"root":root, "pivot":pivot, "where":where, "angle":0.18, "speed":0.0})
+
+func _build_shopfront() -> void:
+	var stand := Node3D.new()
+	stand.name = "WonderStoreKiosk"
+	stand.position = Vector3(-9, 0, 3.8)
+	add_child(stand)
+	_box(stand, Vector3(0, 0.75, 0), Vector3(4.0, 1.50, 2.7), Color("d3a6de"))
+	_box(stand, Vector3(0, 1.58, 0), Vector3(4.7, 0.25, 3.2), Color("945cc3"))
+	_box(stand, Vector3(0, 1.12, -1.43), Vector3(3.4, 0.44, 0.48), Color("f6d094"))
+	_sign(stand, "WONDER STORE", Vector3(0, 2.15, -1.68), Color("fff1b0"))
+	for i in 5:
+		_ball(stand, Vector3(-1.4 + float(i) * 0.7, 1.48, -1.54), 0.22, [Color("f28cb0"), Color("7ecfe2"), Color("b9a1e9"), Color("f4cc6e"), Color("92d7a6")][i])
 
 func _build_arena() -> void:
 	var root := Node3D.new()
@@ -200,6 +213,8 @@ func is_riding() -> bool:
 func prompt_at(pos: Vector3) -> String:
 	if is_riding():
 		return "EXIT RIDE"
+	if Vector2(pos.x, pos.z).distance_to(Vector2(-9, 3.8)) < 4.6:
+		return "OPEN STORE"
 	for h in houses:
 		var here: Vector3 = Vector3(float(h["x"]), 0, HOUSE_Z - 3.7)
 		if Vector2(pos.x, pos.z).distance_to(Vector2(here.x, here.z)) < 3.4:
@@ -221,6 +236,8 @@ func use_nearby(player: CharacterBody3D) -> String:
 		rider = null
 		player.velocity = Vector3.ZERO
 		return "Ride stopped."
+	if Vector2(player.global_position.x, player.global_position.z).distance_to(Vector2(-9, 3.8)) < 4.6:
+		return "OPEN STORE"
 	for i in houses.size():
 		var h: Dictionary = houses[i]
 		var here: Vector3 = Vector3(float(h["x"]), 0, HOUSE_Z - 3.7)
@@ -240,6 +257,9 @@ func use_nearby(player: CharacterBody3D) -> String:
 			ride_kind = "swing"
 			ride_time = 0.0
 			active_swing = i
+			var swing_data: Dictionary = swings[i]
+			swing_data["speed"] = 1.4
+			swings[i] = swing_data
 			player.velocity = Vector3.ZERO
 			return "Swing ride started! Tap EXIT RIDE to stop."
 	if Vector2(player.global_position.x, player.global_position.z).distance_to(Vector2(-35, -34)) < 14.0:
@@ -306,12 +326,22 @@ func _process(delta: float) -> void:
 		else:
 			roof.visible = true
 	for i in swings.size():
-		var pivot: Node3D = swings[i]["pivot"]
-		var strength: float = 0.51 if ride_kind == "swing" and active_swing == i else 0.16
-		pivot.rotation.x = sin(animation_time * 2.10 + float(i) * 1.5) * strength
+		var swing_data: Dictionary = swings[i]
+		var pivot: Node3D = swing_data["pivot"]
+		var angle: float = float(swing_data["angle"])
+		var angular_speed: float = float(swing_data["speed"])
+		var dt: float = minf(delta, 0.05)
+		# Damped gravity-driven pendulum instead of rigid sine-wave motion.
+		angular_speed += (-9.81 / 2.66 * sin(angle) - 0.16 * angular_speed) * dt
+		angle += angular_speed * dt
+		pivot.rotation.x = angle
+		swing_data["angle"] = angle
+		swing_data["speed"] = angular_speed
+		swings[i] = swing_data
 	for i in targets.size():
 		if is_instance_valid(targets[i]):
 			targets[i].position.y = 0.15 * sin(animation_time * 2.3 + float(i))
+			targets[i].position.x = ARENA_CENTER.x - 4.8 + float(i) * 3.2 + 0.65 * sin(animation_time * 1.5 + float(i))
 	if rider != null and ride_kind == "slide":
 		ride_time += delta
 		var t: float = clampf(ride_time / 3.6, 0.0, 1.0)
