@@ -26,13 +26,29 @@ type Player = {
   score: number;
   lastMove: number;
   lastTravel: number;
+  team?: string;
+  cos?: Record<string, string>;
+  lastEvent?: number;
 };
 
 type SavedPlayer = Pick<Player, "id" | "n" | "c" | "score">;
 const ALIASES = ["Sunny", "Rocket", "Pixel", "Comet", "Star", "Sprout", "Bubbles", "Nova"];
+const TEAM_NAMES = ["Sun", "Moon", "Stars"];
+function safeCosmetics(value: unknown): Record<string,string> {
+  const out: Record<string,string> = {};
+  if (!value || typeof value !== "object" || Array.isArray(value)) return out;
+  const input = value as Record<string,unknown>;
+  for (const category of ["Hats", "Shirts", "Pants", "Trails"]) {
+    const cosmetic = input[category];
+    if (typeof cosmetic === "string" && new RegExp("^" + category.toLowerCase() + "-(?:[0-9]|1[0-5])$").test(cosmetic)) {
+      out[category] = cosmetic;
+    }
+  }
+  return out;
+}
 const ROOM_PATTERN = /^[A-HJ-NP-Z2-9]{8}$/;
 const MAX_PLAYERS = 8;
-const WORLD_LIMIT = 56;
+const WORLD_LIMIT = 64;
 const TRAVEL_STOPS: ReadonlyArray<readonly [number, number, number]> = [
   [0, 1.55, 12.0], [0, 1.55, -25.0], [-34, 1.55, 21.0],
   [-32, 1.55, -31.0], [25, 1.55, 17.5], [24, 1.55, -25.0],
@@ -59,7 +75,7 @@ function safeSend(socket: WebSocket, payload: unknown) {
 }
 
 function playerPublic(p: Player) {
-  return { id: p.id, n: p.n, c: p.c, x: p.x, y: p.y, z: p.z, r: p.r, score: p.score };
+  return { id: p.id, n: p.n, team: p.team ?? "Sun", cos: p.cos ?? {}, c: p.c, x: p.x, y: p.y, z: p.z, r: p.r, score: p.score };
 }
 
 export default {
@@ -85,6 +101,7 @@ export class AdventureRoom extends DurableObject<Env> {
   private players = new Map<WebSocket, Player>();
   private collected = new Map<number, number>(); // coin id -> expiration epoch ms
   private lastSweep = 0;
+  private doors: Record<number, boolean> = { 0: false, 1: false, 2: false };
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -100,6 +117,10 @@ export class AdventureRoom extends DurableObject<Env> {
     ctx.blockConcurrencyWhile(async () => {
       const stored = (await ctx.storage.get<Record<string, number>>("taken")) ?? {};
       const now = Date.now();
+      const savedDoors = await ctx.storage.get<Record<number, boolean>>("htmlDoors");
+      if (savedDoors && typeof savedDoors === "object") {
+        for (const id of [0, 1, 2]) this.doors[id] = savedDoors[id] === true;
+      }
       for (const [key, expires] of Object.entries(stored)) {
         const cid = Number(key);
         if (Number.isInteger(cid) && expires > now && cid >= 0 && cid < COINS.length) {
@@ -116,13 +137,15 @@ export class AdventureRoom extends DurableObject<Env> {
     const url = new URL(request.url);
     const rawAlias = url.searchParams.get("alias") ?? "Sunny";
     const alias = ALIASES.includes(rawAlias) ? rawAlias : "Sunny";
+    const rawTeam = url.searchParams.get("team") ?? "Sun";
+    const team = TEAM_NAMES.includes(rawTeam) ? rawTeam : "Sun";
     const rawColor = Number(url.searchParams.get("avatar") ?? "0");
     const color = Number.isInteger(rawColor) ? Math.max(0, Math.min(7, rawColor)) : 0;
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
     const id = crypto.randomUUID().slice(0, 12);
     const newcomer: Player = {
-      id, n: alias, c: color, x: 0, y: 1.55, z: 5, r: 0, score: 0, lastMove: 0, lastTravel: 0,
+      id, n: alias, c: color, x: 0, y: 1.55, z: 5, r: 0, score: 0, lastMove: 0, lastTravel: 0, team, cos: {}, lastEvent: 0,
     };
     const others = [...this.players.values()].map(playerPublic);
     server.serializeAttachment({ id, n: alias, c: color, score: 0 } satisfies SavedPlayer);
@@ -130,7 +153,7 @@ export class AdventureRoom extends DurableObject<Env> {
     this.players.set(server, newcomer);
     safeSend(server, {
       t: "welcome", id, room: url.pathname.split("/").at(-1),
-      score: 0, players: others, taken: [...this.collected.keys()],
+      score: 0, players: others, doors: this.doors, team, taken: [...this.collected.keys()],
     });
     this.broadcast({ t: "join", player: playerPublic(newcomer) }, server);
     return new Response(null, { status: 101, webSocket: client });
@@ -197,6 +220,22 @@ export class AdventureRoom extends DurableObject<Env> {
       this.broadcast({ t: "move", id: p.id, x, y, z, r: p.r }, ws);
       return;
     }
+    if (msg.t === "event") {
+      const now = Date.now();
+      if (p.lastEvent && now - p.lastEvent < 180) return;
+      p.lastEvent = now;
+      if (msg.kind === "door" && typeof msg.house === "number" &&
+          Number.isInteger(msg.house) && msg.house >= 0 && msg.house < 3 &&
+          typeof msg.open === "boolean") {
+        this.doors[msg.house] = msg.open;
+        await this.ctx.storage.put("htmlDoors", this.doors);
+        this.broadcast({ t: "event", id: p.id, kind: "door", house: msg.house, open: msg.open }, ws);
+      } else if (typeof msg.kind === "string" && ["foam", "swing", "slide", "wave"].includes(msg.kind)) {
+        // Visual-only team emotes. No damage, chat, or user-supplied content.
+        this.broadcast({ t: "event", id: p.id, kind: msg.kind }, ws);
+      }
+      return;
+    }
     if (msg.t === "move") {
       const values = [msg.x, msg.y, msg.z, msg.r];
       if (!values.every((n) => typeof n === "number" && Number.isFinite(n))) return;
@@ -208,7 +247,8 @@ export class AdventureRoom extends DurableObject<Env> {
       const dist = Math.hypot(x - p.x, y - p.y, z - p.z);
       if (p.lastMove && dist > Math.max(3.5, seconds * 12.0)) return;
       p.x = x; p.y = y; p.z = z; p.r = r; p.lastMove = now;
-      this.broadcast({ t: "move", id: p.id, x, y, z, r }, ws);
+      if (msg.cos) p.cos = safeCosmetics(msg.cos);
+      this.broadcast({ t: "move", id: p.id, x, y, z, r, cos: p.cos ?? {}, team: p.team ?? "Sun" }, ws);
       return;
     }
     if (msg.t === "collect") {
