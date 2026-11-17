@@ -8,76 +8,117 @@ on:
       - 'godot/**'
       - '.github/workflows/android-debug-apk.yml'
 
+permissions:
+  contents: read
+
 jobs:
   build-android:
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@v4
 
-      - name: Move assets into godot/assets for APK build
+      - name: Restore paths flattened by mobile GitHub upload
+        shell: bash
         run: |
-          mkdir -p "$GITHUB_WORKSPACE/godot/assets"
-          if [ -f "$GITHUB_WORKSPACE/icon.png" ]; then
-            mv "$GITHUB_WORKSPACE/icon.png" "$GITHUB_WORKSPACE/godot/assets/icon.png"
-          fi
-          if [ -f "$GITHUB_WORKSPACE/coin.wav" ]; then
-            mv "$GITHUB_WORKSPACE/coin.wav" "$GITHUB_WORKSPACE/godot/assets/coin.wav"
-          fi
-          if [ -f "$GITHUB_WORKSPACE/happy_loop.wav" ]; then
-            mv "$GITHUB_WORKSPACE/happy_loop.wav" "$GITHUB_WORKSPACE/godot/assets/happy_loop.wav"
-          fi
+          set -euo pipefail
+          mkdir -p godot/scenes godot/scripts godot/assets
+          for f in avatar.gd game.gd network.gd virtual_joystick.gd; do
+            if [ -f "$f" ] && [ ! -f "godot/scripts/$f" ]; then
+              mv "$f" "godot/scripts/$f"
+            fi
+          done
+          for f in icon.png coin.wav happy_loop.wav; do
+            if [ -f "$f" ] && [ ! -f "godot/assets/$f" ]; then
+              mv "$f" "godot/assets/$f"
+            fi
+          done
+          for f in godot/project.godot godot/scenes/main.tscn godot/scripts/game.gd godot/scripts/avatar.gd godot/scripts/network.gd godot/scripts/virtual_joystick.gd godot/assets/icon.png godot/assets/coin.wav godot/assets/happy_loop.wav godot/export_presets.cfg; do
+            test -s "$f" || { echo "Missing required file: $f" >&2; exit 1; }
+          done
 
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: 17
+          java-version: '17'
 
-      - name: Install free Android SDK dependencies
+      - name: Install official Android command-line tools and SDK (free)
+        shell: bash
         run: |
           set -euo pipefail
-          echo "Android SDK: $ANDROID_HOME"
-          mkdir -p "$ANDROID_HOME/cmdline-tools/latest" /tmp/ww-android-cmd
-          curl -fL --retry 3 -o /tmp/ww-cmd.zip https://dl.google.com/android/repository/commandlinetools-linux-15859902_latest.zip
-          echo '4e4c464f145a7512b57d088ac6c278c03c9eea610886b35a5e0804e74eedf583  /tmp/ww-cmd.zip' | sha256sum -c -
-          unzip -q /tmp/ww-cmd.zip -d /tmp/ww-android-cmd
-          cp -a /tmp/ww-android-cmd/cmdline-tools/. "$ANDROID_HOME/cmdline-tools/latest/"
-          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
-          yes | "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --licenses >/dev/null || true
-          "$SDKMANAGER" --sdk_root="$ANDROID_HOME" 'platform-tools' 'build-tools;35.0.0' 'platforms;android-35' 'ndk;28.1.13356709' 'cmake;3.10.2.4988404'
+          SDK_ROOT="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "Android SDK root: $SDK_ROOT"
+          SDKMANAGER="$(find "$SDK_ROOT/cmdline-tools" -type f -path '*/bin/sdkmanager' -print -quit 2>/dev/null || true)"
+          if [ -z "$SDKMANAGER" ]; then
+            echo 'Command-line tools missing; installing official Android CLI package.'
+            mkdir -p "$SDK_ROOT/cmdline-tools/latest" /tmp/ww-android-tools
+            curl -fLSs --retry 3 -o /tmp/ww-cmdline-tools.zip \
+              https://dl.google.com/android/repository/commandlinetools-linux-15859902_latest.zip
+            echo '4e4c464f145a7512b57d088ac6c278c03c9eea610886b35a5e0804e74eedf583  /tmp/ww-cmdline-tools.zip' | sha256sum -c -
+            unzip -q /tmp/ww-cmdline-tools.zip -d /tmp/ww-android-tools
+            cp -R /tmp/ww-android-tools/cmdline-tools/. "$SDK_ROOT/cmdline-tools/latest/"
+            SDKMANAGER="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+          fi
+          test -f "$SDKMANAGER" || { echo 'SDK manager installation failed' >&2; exit 1; }
+          chmod +x "$SDKMANAGER"
+          echo "Using SDK manager: $SDKMANAGER"
+          yes | "$SDKMANAGER" --sdk_root="$SDK_ROOT" --licenses > /dev/null || true
+          "$SDKMANAGER" --sdk_root="$SDK_ROOT" \
+            'platform-tools' 'build-tools;35.0.0' 'platforms;android-35' \
+            'cmdline-tools;latest' 'cmake;3.10.2.4988404' 'ndk;28.1.13356709'
+          test -f "$SDK_ROOT/platform-tools/adb"
+          test -d "$SDK_ROOT/platforms/android-35"
 
-
-      - name: Download official Godot 4.5.2 editor and export templates
+      - name: Download matching official Godot 4.5.2 editor and export templates
+        shell: bash
         run: |
-          mkdir -p "$GITHUB_WORKSPACE/godot-bin" "$HOME/.local/share/godot/export_templates/4.5.2.stable"
-          curl --fail -L --retry 3 -o /tmp/godot.zip https://github.com/godotengine/godot/releases/download/4.5.2-stable/Godot_v4.5.2-stable_linux.x86_64.zip
-          unzip -q /tmp/godot.zip -d "$GITHUB_WORKSPACE/godot-bin"
-          chmod +x "$GITHUB_WORKSPACE/godot-bin/Godot_v4.5.2-stable_linux.x86_64"
-          curl --fail -L --retry 3 -o /tmp/templates.tpz https://github.com/godotengine/godot/releases/download/4.5.2-stable/Godot_v4.5.2-stable_export_templates.tpz
-          mkdir -p /tmp/templates-unpacked
-          unzip -q /tmp/templates.tpz -d /tmp/templates-unpacked
-          cp -R /tmp/templates-unpacked/templates/. "$HOME/.local/share/godot/export_templates/4.5.2.stable/"
+          set -euo pipefail
+          GODOT_VERSION=4.5.2
+          mkdir -p "$GITHUB_WORKSPACE/godot-bin" "$HOME/.local/share/godot/export_templates/$GODOT_VERSION.stable"
+          curl -fL --retry 3 -o /tmp/ww-godot.zip \
+            "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
+          unzip -q /tmp/ww-godot.zip -d "$GITHUB_WORKSPACE/godot-bin"
+          chmod +x "$GITHUB_WORKSPACE/godot-bin/Godot_v${GODOT_VERSION}-stable_linux.x86_64"
+          curl -fL --retry 3 -o /tmp/ww-godot-templates.tpz \
+            "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_export_templates.tpz"
+          mkdir -p /tmp/ww-templates
+          unzip -q /tmp/ww-godot-templates.tpz -d /tmp/ww-templates
+          cp -R /tmp/ww-templates/templates/. "$HOME/.local/share/godot/export_templates/$GODOT_VERSION.stable/"
+          test -s "$HOME/.local/share/godot/export_templates/$GODOT_VERSION.stable/android_debug.apk"
 
-      - name: Generate a local debug signing key
+      - name: Generate temporary debug keystore for testing
+        shell: bash
         run: |
+          set -euo pipefail
           mkdir -p "$HOME/.android"
-          keytool -genkeypair -keystore "$HOME/.android/debug.keystore" -storepass android -keypass android -alias androiddebugkey -keyalg RSA -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+          keytool -genkeypair -keystore "$HOME/.android/debug.keystore" \
+            -storepass android -keypass android -alias androiddebugkey \
+            -keyalg RSA -validity 10000 -dname 'CN=Android Debug,O=Android,C=US'
 
-      - name: Import resources and export debug APK
+      - name: Import and validate Godot project; export native Android APK
+        shell: bash
         env:
-          GODOT_ANDROID_KEYSTORE_DEBUG_PATH: "{{ github.workspace }}/.android/debug.keystore"
           GODOT_ANDROID_KEYSTORE_DEBUG_USER: androiddebugkey
           GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD: android
         run: |
-          # Godot 4.5 reads JAVA_HOME and ANDROID_HOME automatically when available.
+          set -euo pipefail
           export GODOT_ANDROID_KEYSTORE_DEBUG_PATH="$HOME/.android/debug.keystore"
+          GODOT="$GITHUB_WORKSPACE/godot-bin/Godot_v4.5.2-stable_linux.x86_64"
           mkdir -p "$GITHUB_WORKSPACE/build"
-          "$GITHUB_WORKSPACE/godot-bin/Godot_v4.5.2-stable_linux.x86_64" --headless --path "$GITHUB_WORKSPACE/godot" --editor --quit
-          "$GITHUB_WORKSPACE/godot-bin/Godot_v4.5.2-stable_linux.x86_64" --headless --path "$GITHUB_WORKSPACE/godot" --export-debug Android "$GITHUB_WORKSPACE/build/WonderWorld3D-debug.apk"
+          "$GODOT" --headless --path "$GITHUB_WORKSPACE/godot" --editor --quit 2>&1 | tee "$GITHUB_WORKSPACE/build/godot-import.log"
+          if grep -Eiq 'SCRIPT ERROR|Parse Error|Parser Error|Failed to load script' "$GITHUB_WORKSPACE/build/godot-import.log"; then
+            echo 'Godot reported a game-script error. See import log above.' >&2
+            exit 1
+          fi
+          "$GODOT" --headless --path "$GITHUB_WORKSPACE/godot" \
+            --export-debug Android "$GITHUB_WORKSPACE/build/WonderWorld3D-debug.apk"
           test -s "$GITHUB_WORKSPACE/build/WonderWorld3D-debug.apk"
 
       - uses: actions/upload-artifact@v4
         with:
           name: WonderWorld3D-Android-debug-APK
           path: build/WonderWorld3D-debug.apk
+          if-no-files-found: error
           retention-days: 7
