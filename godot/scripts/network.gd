@@ -86,3 +86,7 @@ func send_position(pos: Vector3, rot: float) -> void:
 
 func collect_coin(index: int) -> void:
 	send_message({"t":"collect", "coin":index})
+
+func request_travel(stop: int) -> void:
+	# Request server-approved movement to a registered city destination.
+	send_message({"t": "travel", "stop": stop})
