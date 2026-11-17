@@ -16,6 +16,7 @@ var swings: Array[Dictionary] = []
 var targets: Array[Node3D] = []
 var animation_time: float = 0.0
 var rider: CharacterBody3D
+var watch_player: CharacterBody3D
 var ride_kind: String = ""
 var ride_time: float = 0.0
 var active_swing: int = -1
@@ -299,8 +300,8 @@ func _process(delta: float) -> void:
 		var target_angle: float = -1.67 if bool(h["open"]) else 0.0
 		hinge.rotation.y = lerp_angle(hinge.rotation.y, target_angle, minf(1.0, delta * 5.0))
 		var roof: Node3D = h["roof"]
-		if rider != null:
-			var p: Vector3 = rider.global_position
+		if watch_player != null and is_instance_valid(watch_player):
+			var p: Vector3 = watch_player.global_position
 			roof.visible = not (absf(p.x - float(h["x"])) < 3.7 and absf(p.z - HOUSE_Z) < 3.7)
 		else:
 			roof.visible = true
