@@ -84,5 +84,17 @@ func _run_tests() -> void:
 	if activities.battle_active:
 		_fail("Foam-tag timer did not complete")
 		return
+	# Allow the foam-ball tween to finish before releasing the scene.
+	await create_timer(0.40).timeout
+	activities.reset_player()
+	shop.hide_shop()
+	game.queue_free()
+	shop = null
+	player = null
+	activities = null
+	game = null
+	scene = null
+	await process_frame
+	await process_frame
 	print("PASS INTEGRATION: offline spawn, 84-style catalog, purchase/equip, house door/interior, moving water slide, swing ride, foam-tag hits and timeout.")
 	quit(0)
