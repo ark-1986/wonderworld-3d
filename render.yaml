@@ -1,0 +1,13 @@
+# WonderWorld team multiplayer: optional free Render Blueprint.
+services:
+  - type: web
+    name: wonderworld-teams
+    runtime: node
+    plan: free
+    rootDir: web
+    buildCommand: echo "WonderWorld requires zero npm dependencies"
+    startCommand: node room-server.js
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
