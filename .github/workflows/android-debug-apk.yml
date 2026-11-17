@@ -129,27 +129,37 @@ jobs:
           fi
           echo 'Running native scene smoke test (no remote server needed)...'
           "$GODOT" --headless --path "$GITHUB_WORKSPACE/godot" --quit-after 20 2>&1 | tee "$GITHUB_WORKSPACE/build/godot-runtime.log"
-          if grep -Eiq 'SCRIPT ERROR|Parse Error|Parser Error|Failed to load script' "$GITHUB_WORKSPACE/build/godot-runtime.log"; then
+          if grep -Eiq 'SCRIPT ERROR|Parse Error|Parser Error|Failed to load script|ERROR:' "$GITHUB_WORKSPACE/build/godot-runtime.log"; then
             echo 'Godot scene failed runtime validation.' >&2
             exit 1
           fi
+          echo 'Exercising offline store, purchase/equip, doors, interiors, slide, swings and foam-tag...'
+          "$GODOT" --headless --path "$GITHUB_WORKSPACE/godot" --script res://tests/feature_smoke.gd 2>&1 | tee "$GITHUB_WORKSPACE/build/feature-smoke.log"
+          if grep -Eiq 'TEST FAILURE|SCRIPT ERROR|Parse Error|Parser Error|Failed to load script|ERROR:' "$GITHUB_WORKSPACE/build/feature-smoke.log"; then
+            echo 'Interactive gameplay integration tests failed.' >&2
+            exit 1
+          fi
+          grep -Fq 'PASS INTEGRATION' "$GITHUB_WORKSPACE/build/feature-smoke.log" || { echo 'Integration pass marker missing' >&2; exit 1; }
           "$GODOT" --headless --path "$GITHUB_WORKSPACE/godot" \
-            --export-debug Android "$GITHUB_WORKSPACE/build/WonderWorld-AdventureCity-v0.3.1.apk"
-          test -s "$GITHUB_WORKSPACE/build/WonderWorld-AdventureCity-v0.3.1.apk"
+            --export-debug Android "$GITHUB_WORKSPACE/build/WonderWorld-Interactive-v0.4.0.apk"
+          test -s "$GITHUB_WORKSPACE/build/WonderWorld-Interactive-v0.4.0.apk"
 
       - name: Save import log when build fails
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: AdventureCity-Godot-Smoke-Diagnostics
-          path: build/godot-import.log
+          path: |
+            build/godot-import.log
+            build/godot-runtime.log
+            build/feature-smoke.log
           if-no-files-found: ignore
           retention-days: 7
 
       - uses: actions/upload-artifact@v4
         with:
-          name: WonderWorld-AdventureCity-v0.3.1-Android-APK
-          path: build/WonderWorld-AdventureCity-v0.3.1.apk
+          name: WonderWorld-Interactive-v0.4.0-Android-APK
+          path: build/WonderWorld-Interactive-v0.4.0.apk
           if-no-files-found: error
           retention-days: 7
 
@@ -160,5 +170,6 @@ jobs:
           path: |
             build/godot-import.log
             build/godot-runtime.log
+            build/feature-smoke.log
           if-no-files-found: ignore
           retention-days: 7
