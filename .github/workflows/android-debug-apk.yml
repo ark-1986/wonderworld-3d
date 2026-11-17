@@ -6,6 +6,8 @@ on:
     branches: [main, master]
     paths:
       - 'godot/**'
+      - 'server/**'
+      - 'tools/**'
       - '.github/workflows/android-debug-apk.yml'
 
 permissions:
