@@ -2,10 +2,10 @@
 config_version=5
 
 [application]
-config/name="WonderWorld 3D"
+config/name="WonderWorld 3D — Adventure City"
 run/main_scene="res://scenes/main.tscn"
 config/features=PackedStringArray("4.5", "GL Compatibility")
-config/description="Colorful family-friendly 3D cooperative adventure game"
+config/description="A colorful kids 3D city with castle, pet garden, racing, parkour and water park"
 config/icon="res://assets/icon.png"
 
 [display]
@@ -15,9 +15,10 @@ window/stretch/mode="canvas_items"
 window/handheld/orientation=0
 
 [rendering]
+anti_aliasing/quality/msaa_3d=2
+textures/vram_compression/import_etc2_astc=true
 renderer/rendering_method="gl_compatibility"
 renderer/rendering_method.mobile="gl_compatibility"
-textures/vram_compression/import_etc2_astc=true
 textures/default_filters/use_nearest_mipmap_filter=false
 environment/defaults/default_clear_color=Color(0.388, 0.761, 0.98, 1)
 
