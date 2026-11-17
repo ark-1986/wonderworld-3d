@@ -5,15 +5,19 @@ extends Node3D
 const AvatarScript = preload("res://scripts/avatar.gd")
 const NetworkScript = preload("res://scripts/network.gd")
 const JoystickScript = preload("res://scripts/virtual_joystick.gd")
+const CityWorldScript = preload("res://scripts/wonder_city.gd")
+const MiniMapScript = preload("res://scripts/city_minimap.gd")
 const ALIASES: Array[String] = ["Sunny", "Rocket", "Pixel", "Comet", "Star", "Sprout", "Bubbles", "Nova"]
 const COIN_POSITIONS: Array[Vector3] = [
-	Vector3(0, 1.15, -5), Vector3(5, 1.15, 1), Vector3(-5, 1.15, 2),
-	Vector3(9, 1.15, 8), Vector3(13, 1.15, 5), Vector3(-9, 1.15, 9),
-	Vector3(-13, 1.15, -7), Vector3(3, 1.15, 12), Vector3(-5, 1.15, -13),
-	Vector3(14, 1.15, -13), Vector3(-14, 1.15, 13),
-	Vector3(7, 2.0, -7), Vector3(10.1, 2.65, -7), Vector3(13.2, 3.3, -7),
-	Vector3(16.3, 3.95, -7), Vector3(19.4, 4.65, -7),
-	Vector3(4, 1.15, -15), Vector3(-16, 1.15, -1)
+	Vector3(0, 1.15, 6), Vector3(5, 1.15, 1), Vector3(-5, 1.15, 1),
+	Vector3(10, 1.15, 10), Vector3(-10, 1.15, 10),
+	Vector3(0, 1.15, -14), Vector3(0, 1.15, -24), Vector3(0, 1.15, -30),
+	Vector3(-28, 1.15, 20), Vector3(-34, 1.15, 25),
+	Vector3(-34, 1.15, -30), Vector3(-40, 1.15, -29),
+	Vector3(20, 1.15, 17), Vector3(40, 1.15, 17),
+	Vector3(40, 1.15, 35), Vector3(20, 1.15, 35),
+	Vector3(17, 1.5, -29), Vector3(22, 1.65, -25),
+	Vector3(27, 2.8, -26), Vector3(37, 3.85, -27)
 ]
 
 var network
@@ -24,6 +28,8 @@ var hud_score: Label
 var hud_status: Label
 var hud_room: Label
 var hud_rankings: Label
+var friends_panel: PanelContainer
+var room_copy_button: Button
 var menu_status: Label
 var join_input: LineEdit
 var alias_selector: OptionButton
@@ -45,6 +51,50 @@ var jump_requested: bool = false
 var move_timer: float = 0.0
 var offline_seconds: float = 0.0
 var orbit_time: float = 0.0
+# Adventure City v0.2 systems. Multiplayer still uses the original server protocol.
+var city_world: Node3D
+var pet_companion: Node3D
+var ride_shell: Node3D
+var pet_enabled: bool = false
+var car_enabled: bool = false
+var pet_button: Button
+var car_button: Button
+var quest_label: Label
+var city_map
+var action_button: Button
+var race_running: bool = false
+var race_time: float = 0.0
+var race_gate: int = 0
+var last_zone_name: String = ""
+var slide_reuse_timer: float = 0.0
+var slide_count: int = 0
+const RACE_GATES = [Vector2(20,17), Vector2(44,17), Vector2(44,35), Vector2(20,35), Vector2(20,17)]
+var district_label: Label
+var district_timer: float = 0.0
+var districts_seen: Dictionary = {}
+var travel_index: int = 0
+var travel_pending: bool = false
+var pending_travel_stop: int = -1
+const TRAVEL_STOPS: Array[Vector3] = [
+	Vector3(0, 1.55, 12.0),
+	Vector3(0, 1.55, -25.0),
+	Vector3(-34, 1.55, 21.0),
+	Vector3(-32, 1.55, -31.0),
+	Vector3(25, 1.55, 17.5),
+	Vector3(24, 1.55, -25.0)
+]
+const TRAVEL_NAMES: Array[String] = [
+	"Central Plaza", "Adventure Castle", "Pet Garden",
+	"Splash Water Park", "Racing Challenge", "Rainbow Obby"
+]
+const DISTRICTS = [
+    {"name":"Adventure Castle", "point": Vector2(0, -35), "radius": 12.0},
+    {"name":"Pet Garden", "point": Vector2(-34, 22), "radius": 12.0},
+    {"name":"Splash Water Park", "point": Vector2(-32, -31), "radius": 13.5},
+    {"name":"Racing Challenge", "point": Vector2(32, 26), "radius": 14.5},
+    {"name":"Rainbow Obby", "point": Vector2(31, -29), "radius": 14.5}
+]
+
 
 func _ready() -> void:
 	randomize()
@@ -65,6 +115,9 @@ func _physics_process(delta: float) -> void:
 	var axis := pad_axis if pad_axis.length() > 0.08 else key_axis
 	var is_jump := jump_requested or Input.is_action_just_pressed("jump")
 	jump_requested = false
+	# Do not send old location while the server is confirming fast travel.
+	if travel_pending:
+		return
 	local_player.control_move(axis, is_jump, delta)
 	if multiplayer_mode and network.connected:
 		move_timer += delta
@@ -74,9 +127,26 @@ func _physics_process(delta: float) -> void:
 
 func _process(delta: float) -> void:
 	if playing and local_player != null:
-		var desired: Vector3= local_player.global_position + Vector3(0, 6.2, 10.8)
+		var desired: Vector3 = local_player.global_position + Vector3(0, 5.75, 9.6)
 		camera.global_position = camera.global_position.lerp(desired, minf(1.0, delta * 5.0))
-		camera.look_at(local_player.global_position + Vector3(0, 0.9, 0))
+		camera.look_at(local_player.global_position + Vector3(0, 1.45, 0))
+		if city_map != null:
+			city_map.set_world_position(local_player.global_position)
+		if race_running:
+			race_time += delta
+			if race_time >= 90.0:
+				race_running = false
+				hud_status.text = "Race expired! Return to the Raceway and try again."
+			else:
+				_check_race()
+		if pet_enabled and is_instance_valid(pet_companion):
+			var follow: Vector3 = local_player.global_position + Vector3(-1.7, -0.40, 1.5)
+			pet_companion.global_position = pet_companion.global_position.lerp(follow, minf(1.0, delta * 5.0))
+			pet_companion.rotation.y = local_player.rotation.y
+		district_timer += delta
+		if district_timer >= 0.45:
+			district_timer = 0.0
+			_update_districts()
 	else:
 		orbit_time += delta
 		camera.global_position = Vector3(13.5 * sin(orbit_time * 0.06), 10.0, 17.5)
@@ -100,7 +170,7 @@ func _material(color: Color, glowing: bool = false) -> StandardMaterial3D:
 	if glowing:
 		m.emission_enabled = true
 		m.emission = color
-		m.emission_energy_multiplier = 0.45
+		m.emission_energy_multiplier = 0.16
 	return m
 
 func _block(where: Vector3, dims: Vector3, color: Color, physical: bool = true) -> Node3D:
@@ -158,90 +228,43 @@ func _flower(x: float, z: float, color: Color) -> void:
 	_sphere(Vector3(x, 0.37, z), 0.13, color)
 
 func _build_world() -> void:
+	# Proper art-direction: contrast first, warm evening sunlight, saturated ground,
+	# stone streets and hand-textured shop roofs. The old overexposed white island
+	# is replaced entirely by a walkable city with five activity districts.
 	var environment := WorldEnvironment.new()
 	var env := Environment.new()
 	var sky := Sky.new()
 	var sky_mat := ProceduralSkyMaterial.new()
-	sky_mat.sky_top_color = Color("47a5f5")
-	sky_mat.sky_horizon_color = Color("b5edff")
-	sky_mat.ground_bottom_color = Color("70c5e5")
+	sky_mat.sky_top_color = Color("3d91bd")
+	sky_mat.sky_horizon_color = Color("a0cce3")
+	sky_mat.ground_bottom_color = Color("74a0ac")
 	sky.sky_material = sky_mat
 	env.background_mode = Environment.BG_SKY
 	env.sky = sky
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
+	env.ambient_light_energy = 0.42
 	env.reflected_light_source = Environment.REFLECTION_SOURCE_BG
 	env.tonemap_mode = Environment.TONE_MAPPER_FILMIC
+	env.adjustment_enabled = true
+	env.adjustment_brightness = 0.81
+	env.adjustment_contrast = 1.14
+	env.adjustment_saturation = 1.14
 	environment.environment = env
 	add_child(environment)
 	var sun := DirectionalLight3D.new()
-	sun.rotation_degrees = Vector3(-50, -26, 0)
-	sun.light_color = Color("fff4dc")
-	sun.light_energy = 1.45
+	sun.rotation_degrees = Vector3(-54, -28, -2)
+	sun.light_color = Color("ffe4bb")
+	sun.light_energy = 0.82
 	sun.shadow_enabled = true
 	add_child(sun)
 	camera = Camera3D.new()
-	camera.fov = 66
-	camera.position = Vector3(0, 8, 17)
+	camera.fov = 60.0
+	camera.position = Vector3(0, 8, 18)
 	camera.current = true
 	add_child(camera)
-	# Ocean and main lush island; walkable blocks have real Godot physics.
-	_block(Vector3(0, -2.6, 0), Vector3(160, 0.35, 160), Color("63c9ef"), false)
-	_block(Vector3(0, -1.55, 0), Vector3(46, 2.3, 46), Color("efcb94"))
-	_block(Vector3(0, -0.57, 0), Vector3(42, 1.14, 42), Color("7bdb99"))
-	# Pastel footpaths and central plaza.
-	_block(Vector3(0, 0.05, 0), Vector3(7.4, 0.08, 7.4), Color("ffeacb"), false)
-	_block(Vector3(0, 0.055, 9.1), Vector3(2.35, 0.07, 16), Color("ffedcb"), false)
-	_block(Vector3(0, 0.058, -9.1), Vector3(2.35, 0.07, 16), Color("ffedcb"), false)
-	_block(Vector3(9.1, 0.062, 0), Vector3(16, 0.07, 2.3), Color("ffedcb"), false)
-	_block(Vector3(-9.1, 0.062, 0), Vector3(16, 0.07, 2.3), Color("ffedcb"), false)
-	# Central rainbow landmark.
-	_cylinder(Vector3(0, 0.42, 0), 1.55, 1.8, 0.85, Color("ffffff"))
-	_cylinder(Vector3(0, 0.83, 0), 1.3, 1.5, 0.18, Color("5ac9de"))
-	_cylinder(Vector3(0, 1.65, 0), 0.15, 0.20, 1.55, Color("ffaf62"))
-	_sphere(Vector3(0, 2.62, 0), 0.64, Color("ffe576"))
-	for i in 8:
-		var angle := i * TAU / 8.0
-		_sphere(Vector3(cos(angle) * 2.35, 0.4, sin(angle) * 2.35), 0.22, Color("ff9ab4"))
-	# Little houses at the edge of the world.
-	for hut in [Vector3(-11, 0, -14), Vector3(14, 0, 13)]:
-		_block(hut + Vector3(0, 1.55, 0), Vector3(4.1, 3.1, 3.7), Color("fff0cb"), false)
-		_block(hut + Vector3(0, 3.3, 0), Vector3(4.7, 0.66, 4.3), Color("ff8bac"), false)
-		_block(hut + Vector3(0, 1.0, -1.89), Vector3(0.95, 2, 0.12), Color("9c83ef"), false)
-		_block(hut + Vector3(-1.35, 2.0, -1.89), Vector3(0.55, 0.78, 0.12), Color("9fe0ff"), false)
-	# Jumping challenge with gradually rising, collidable platforms.
-	for i in 5:
-		var xx := 7.0 + i * 3.1
-		var h := 0.72 + i * 0.65
-		_block(Vector3(xx, h * 0.5, -7), Vector3(2.5, h, 2.8), Color("b491fc") if i % 2 == 0 else Color("ffab88"))
-		_block(Vector3(xx, h + 0.06, -7), Vector3(2.65, 0.12, 2.95), Color("f0e7ff") if i % 2 == 0 else Color("fff0cd"), false)
-	_block(Vector3(20.3, 4.42, -7), Vector3(0.2, 3.1, 0.2), Color("fefefe"), false)
-	_block(Vector3(21.2, 5.53, -7), Vector3(1.9, 0.75, 0.1), Color("ffde75"), false)
-	# Decorative foliage and blossoms.
-	for entry in [
-		[-18.0, -18.0, 1.0, false], [-16.0, 7.0, 0.95, true],
-		[-17.0, 18.0, 1.1, false], [-3.0, 18.0, 1.1, true],
-		[17.0, 17.0, 1.0, false], [18.0, 2.0, 0.85, true],
-		[15.0, -17.0, 1.08, false], [-1.0, -18.0, 1.0, true],
-		[-18.0, -1.0, 0.9, false], [17.0, -19.0, 1.0, true]
-	]:
-		_tree(float(entry[0]), float(entry[1]), float(entry[2]), bool(entry[3]))
-	for i in 50:
-		var a := i * 2.39996
-		var rad := 9.0 + (i % 6) * 1.82
-		var x := cos(a) * rad
-		var z := sin(a) * rad
-		if absf(x) < 4.2 or absf(z) < 4.2 or (x > 4 and z < -4 and z > -11):
-			continue
-		_flower(x, z, Color("fff6b4") if i % 3 == 0 else Color("ff90ac") if i % 3 == 1 else Color("bd94ff"))
-	# Tiny distant decorative islands and fluffy cloud clusters.
-	for x in [-42.0, 43.0]:
-		_block(Vector3(x, -1.3, -14), Vector3(12, 1.0, 10), Color("f4ca94"), false)
-		_block(Vector3(x, -0.82, -14), Vector3(11, 0.3, 9), Color("75d59e"), false)
-	for cloud_x in [-23.0, -10.0, 6.0, 26.0]:
-		var cloud_y := 15.0 + fmod(absf(cloud_x), 5.0)
-		_sphere(Vector3(cloud_x, cloud_y, -40), 2.6, Color("f8fcff"))
-		_sphere(Vector3(cloud_x + 2.4, cloud_y - 0.25, -40), 2.0, Color("f8fcff"))
-		_sphere(Vector3(cloud_x - 2.1, cloud_y - 0.3, -40), 1.7, Color("f8fcff"))
+	city_world = CityWorldScript.new()
+	city_world.name = "WonderCity"
+	add_child(city_world)
 	for id in COIN_POSITIONS.size():
 		_add_coin(id, COIN_POSITIONS[id])
 
@@ -325,7 +348,7 @@ func _build_interface() -> void:
 	# Start menu over a live view of the 3D scene.
 	menu_overlay = ColorRect.new()
 	menu_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	menu_overlay.color = Color(0.015, 0.045, 0.12, 0.48)
+	menu_overlay.color = Color(0.016, 0.036, 0.087, 0.62)
 	menu_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
 	root.add_child(menu_overlay)
 	var menu_panel := PanelContainer.new()
@@ -337,7 +360,7 @@ func _build_interface() -> void:
 	menu_panel.offset_right = 283
 	menu_panel.offset_top = -298
 	menu_panel.offset_bottom = 298
-	menu_panel.add_theme_stylebox_override("panel", _style(Color("173354"), 24, Color("5ab9da"), 3))
+	menu_panel.add_theme_stylebox_override("panel", _style(Color("20384f"), 24, Color("e5bd72"), 3))
 	menu_overlay.add_child(menu_panel)
 	var margin := MarginContainer.new()
 	margin.add_theme_constant_override("margin_top", 26)
@@ -348,10 +371,10 @@ func _build_interface() -> void:
 	var stack := VBoxContainer.new()
 	stack.add_theme_constant_override("separation", 10)
 	margin.add_child(stack)
-	var title := _label("WONDERWORLD", 44, Color("ffde72"))
+	var title := _label("WONDERWORLD", 49, Color("ffdf8e"))
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	stack.add_child(title)
-	var subtitle := _label("3D ADVENTURE  •  FRIENDS  •  FUN", 17, Color("d6efff"))
+	var subtitle := _label("ADVENTURE CITY  •  PETS  •  RACES  •  SPLASH", 16, Color("d6efff"))
 	subtitle.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	stack.add_child(subtitle)
 	stack.add_child(_gap(5))
@@ -383,7 +406,7 @@ func _build_interface() -> void:
 	practice.pressed.connect(_practice)
 	stack.add_child(practice)
 	stack.add_child(_gap(4))
-	menu_status = _label("Offline practice works now. Online rooms need your free server URL.", 15, Color("bce2ec"))
+	menu_status = _label("Explore 5 adventure zones offline. Friends rooms need a configured free server.", 15, Color("bce2ec"))
 	menu_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	menu_status.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	stack.add_child(menu_status)
@@ -399,28 +422,40 @@ func _build_interface() -> void:
 	hud.visible = false
 	var score_panel := PanelContainer.new()
 	score_panel.position = Vector2(22, 22)
-	score_panel.custom_minimum_size = Vector2(350, 82)
-	score_panel.add_theme_stylebox_override("panel", _style(Color(0.07, 0.15, 0.25, 0.82), 17, Color(0.4, 0.85, 0.95, 0.55), 2))
+	score_panel.custom_minimum_size = Vector2(365, 78)
+	score_panel.add_theme_stylebox_override("panel", _style(Color("1d3c56"), 17, Color("7ec7bc"), 2))
 	hud.add_child(score_panel)
 	var score_wrap := VBoxContainer.new()
 	score_wrap.add_theme_constant_override("separation", 3)
 	score_panel.add_child(score_wrap)
-	hud_score = _label("✦ 0 POINTS", 24, Color("ffe779"))
+	hud_score = _label("✦ 0 POINTS", 26, Color("ffdf84"))
 	score_wrap.add_child(hud_score)
-	hud_status = _label("Explore the island and collect gems!", 14, Color("e2f3ff"))
+	hud_status = _label("Explore, collect gems and unlock every district!", 14, Color("e2f3ff"))
 	score_wrap.add_child(hud_status)
-	var scoreboard := PanelContainer.new()
-	scoreboard.anchor_left = 1.0
-	scoreboard.anchor_right = 1.0
-	scoreboard.offset_left = -255
-	scoreboard.offset_right = -18
-	scoreboard.offset_top = 22
-	scoreboard.offset_bottom = 240
-	scoreboard.add_theme_stylebox_override("panel", _style(Color(0.08, 0.16, 0.28, 0.82), 16, Color(0.4, 0.85, 0.95, 0.55), 2))
-	hud.add_child(scoreboard)
+	friends_panel = PanelContainer.new()
+	friends_panel.anchor_left = 1.0
+	friends_panel.anchor_right = 1.0
+	friends_panel.offset_left = -230
+	friends_panel.offset_right = -18
+	friends_panel.offset_top = 22
+	friends_panel.offset_bottom = 190
+	friends_panel.add_theme_stylebox_override("panel", _style(Color(0.08, 0.16, 0.28, 0.78), 16, Color(0.4, 0.85, 0.95, 0.45), 1))
+	hud.add_child(friends_panel)
 	hud_rankings = _label("FRIENDS\n\nYou • 0", 18, Color("eaf6ff"))
 	hud_rankings.vertical_alignment = VERTICAL_ALIGNMENT_TOP
-	scoreboard.add_child(hud_rankings)
+	friends_panel.add_child(hud_rankings)
+	var city_map_panel := PanelContainer.new()
+	city_map_panel.anchor_left = 1.0
+	city_map_panel.anchor_right = 1.0
+	city_map_panel.offset_left = -254
+	city_map_panel.offset_right = -18
+	city_map_panel.offset_top = 207
+	city_map_panel.offset_bottom = 383
+	city_map_panel.add_theme_stylebox_override("panel", _style(Color("173046"), 13, Color("3b9caa"), 1))
+	hud.add_child(city_map_panel)
+	city_map = MiniMapScript.new()
+	city_map.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	city_map_panel.add_child(city_map)
 	var room_panel := PanelContainer.new()
 	room_panel.anchor_left = 0.5
 	room_panel.anchor_right = 0.5
@@ -428,22 +463,27 @@ func _build_interface() -> void:
 	room_panel.offset_right = 185
 	room_panel.offset_top = 20
 	room_panel.offset_bottom = 66
-	room_panel.add_theme_stylebox_override("panel", _style(Color(0.08, 0.16, 0.28, 0.83), 15))
+	room_panel.add_theme_stylebox_override("panel", _style(Color("22415d"), 15))
 	hud.add_child(room_panel)
 	var room_box := HBoxContainer.new()
 	room_box.alignment = BoxContainer.ALIGNMENT_CENTER
 	room_panel.add_child(room_box)
 	hud_room = _label("PRACTICE", 18, Color("f8faff"))
 	room_box.add_child(hud_room)
-	var copy_button := _button("COPY", Color("348ead"))
-	copy_button.custom_minimum_size = Vector2(83, 36)
-	copy_button.pressed.connect(_copy_room)
-	room_box.add_child(copy_button)
+	room_copy_button = _button("COPY", Color("348ead"))
+	room_copy_button.custom_minimum_size = Vector2(83, 36)
+	room_copy_button.pressed.connect(_copy_room)
+	room_box.add_child(room_copy_button)
 	var home_button := _button("HOME", Color("ce6b88"))
-	home_button.position = Vector2(22, 116)
+	home_button.position = Vector2(22, 215)
 	home_button.custom_minimum_size = Vector2(112, 46)
 	home_button.pressed.connect(_back_to_menu)
 	hud.add_child(home_button)
+	var explore_button := _button("EXPLORE ▶", Color("348e91"))
+	explore_button.position = Vector2(22, 275)
+	explore_button.custom_minimum_size = Vector2(156, 47)
+	explore_button.pressed.connect(_quick_travel)
+	hud.add_child(explore_button)
 	joystick = JoystickScript.new()
 	joystick.anchor_left = 0.0
 	joystick.anchor_right = 0.0
@@ -466,6 +506,52 @@ func _build_interface() -> void:
 	jump_button.add_theme_font_size_override("font_size", 28)
 	jump_button.pressed.connect(func(): jump_requested = true)
 	hud.add_child(jump_button)
+	# Live quest tracker is visible during both offline and online play.
+	var district_panel := PanelContainer.new()
+	district_panel.position = Vector2(22, 111)
+	district_panel.custom_minimum_size = Vector2(365, 89)
+	district_panel.add_theme_stylebox_override("panel", _style(Color("294b60"), 14, Color("48af97"), 2))
+	hud.add_child(district_panel)
+	var district_stack := VBoxContainer.new()
+	district_stack.add_theme_constant_override("separation", 3)
+	district_panel.add_child(district_stack)
+	district_label = _label("WELCOME TO ADVENTURE CITY", 17, Color("fff2c4"))
+	district_stack.add_child(district_label)
+	quest_label = _label("DISCOVER 5 DISTRICTS  •  0/5", 14, Color("c2f7e9"))
+	district_stack.add_child(quest_label)
+	pet_button = _button("PET", Color("3eaf93"))
+	pet_button.anchor_left = 1.0
+	pet_button.anchor_right = 1.0
+	pet_button.anchor_top = 1.0
+	pet_button.anchor_bottom = 1.0
+	pet_button.offset_left = -461
+	pet_button.offset_right = -350
+	pet_button.offset_top = -136
+	pet_button.offset_bottom = -81
+	pet_button.pressed.connect(_toggle_pet)
+	hud.add_child(pet_button)
+	car_button = _button("DRIVE", Color("518bc1"))
+	car_button.anchor_left = 1.0
+	car_button.anchor_right = 1.0
+	car_button.anchor_top = 1.0
+	car_button.anchor_bottom = 1.0
+	car_button.offset_left = -338
+	car_button.offset_right = -202
+	car_button.offset_top = -136
+	car_button.offset_bottom = -81
+	car_button.pressed.connect(_toggle_car)
+	hud.add_child(car_button)
+	action_button = _button("QUEST", Color("8e75c6"))
+	action_button.anchor_left = 1.0
+	action_button.anchor_right = 1.0
+	action_button.anchor_top = 1.0
+	action_button.anchor_bottom = 1.0
+	action_button.offset_left = -335
+	action_button.offset_right = -205
+	action_button.offset_top = -206
+	action_button.offset_bottom = -151
+	action_button.pressed.connect(_use_zone_action)
+	hud.add_child(action_button)
 	_update_hud()
 
 func _style(color: Color, radius: int, border_color: Color = Color.TRANSPARENT, border: int = 0) -> StyleBoxFlat:
@@ -478,6 +564,9 @@ func _style(color: Color, radius: int, border_color: Color = Color.TRANSPARENT, 
 	s.content_margin_right = 17
 	s.content_margin_top = 10
 	s.content_margin_bottom = 10
+	s.shadow_color = Color(0.02, 0.06, 0.12, 0.30)
+	s.shadow_size = 3
+	s.shadow_offset = Vector2(0, 2)
 	return s
 
 func _label(value: String, font_size: int, color: Color) -> Label:
@@ -552,7 +641,21 @@ func _start_play(is_multi: bool, code: String) -> void:
 	playing = true
 	multiplayer_mode = is_multi
 	active_room = code
+	travel_index = 0
+	travel_pending = false
+	pending_travel_stop = -1
+	friends_panel.visible = is_multi
+	room_copy_button.visible = is_multi
 	current_score = 0
+	districts_seen.clear()
+	pet_enabled = false
+	car_enabled = false
+	race_running = false
+	race_gate = 0
+	race_time = 0.0
+	slide_count = 0
+	slide_reuse_timer = 0.0
+	last_zone_name = ""
 	pending_coins.clear()
 	scores.clear()
 	for peer in players.values():
@@ -564,22 +667,73 @@ func _start_play(is_multi: bool, code: String) -> void:
 		local_player.queue_free()
 	local_player = AvatarScript.new()
 	local_player.configure(active_alias, active_color, true)
-	local_player.position = Vector3(0, 1.55, 5)
+	local_player.position = Vector3(0, 1.55, 9.7)
 	add_child(local_player)
+	if is_instance_valid(pet_companion):
+		pet_companion.queue_free()
+	pet_companion = _make_pet_companion()
+	pet_companion.visible = false
+	pet_companion.global_position = Vector3(-1.7, 1.05, 11.4)
+	if is_instance_valid(ride_shell):
+		ride_shell.queue_free()
+	ride_shell = _make_ride_shell()
+	ride_shell.visible = false
+	pet_button.text = "PET"
+	car_button.text = "DRIVE"
 	move_timer = 0.0
 	menu_overlay.visible = false
 	hud.visible = true
 	_update_hud()
+
+func _complete_travel(stop: int) -> void:
+	if local_player == null or stop < 0 or stop >= TRAVEL_STOPS.size():
+		return
+	travel_index = stop
+	local_player.global_position = TRAVEL_STOPS[stop]
+	local_player.velocity = Vector3.ZERO
+	hud_status.text = "Now visiting: " + TRAVEL_NAMES[stop]
+	_update_districts()
+
+func _request_travel_to(stop: int) -> void:
+	if not playing or local_player == null:
+		return
+	if multiplayer_mode:
+		if not network.connected:
+			hud_status.text = "Connecting to your private room…"
+			return
+		if travel_pending:
+			hud_status.text = "Confirming previous travel…"
+			return
+		travel_pending = true
+		pending_travel_stop = stop
+		network.request_travel(stop)
+		hud_status.text = "Traveling to: " + TRAVEL_NAMES[stop]
+		return
+	_complete_travel(stop)
+
+func _quick_travel() -> void:
+	# Online travel must be acknowledged by the server to avoid desync.
+	if not playing or local_player == null:
+		return
+	_request_travel_to((travel_index + 1) % TRAVEL_STOPS.size())
 
 func _back_to_menu() -> void:
 	network.disconnect_room()
 	playing = false
 	multiplayer_mode = false
 	active_room = ""
+	travel_pending = false
+	pending_travel_stop = -1
 	pending_coins.clear()
 	if local_player != null:
 		local_player.queue_free()
 		local_player = null
+	if is_instance_valid(pet_companion):
+		pet_companion.queue_free()
+		pet_companion = null
+	ride_shell = null
+	pet_enabled = false
+	car_enabled = false
 	for peer in players.values():
 		(peer as Node).queue_free()
 	players.clear()
@@ -604,6 +758,8 @@ func _network_status(message: String) -> void:
 func _network_lost(message: String) -> void:
 	if playing and multiplayer_mode:
 		multiplayer_mode = false
+		travel_pending = false
+		pending_travel_stop = -1
 		for peer in players.values():
 			(peer as Node).queue_free()
 		players.clear()
@@ -631,6 +787,16 @@ func _network_message(data: Dictionary) -> void:
 		return
 	var t: String = str(data.get("t", ""))
 	match t:
+		"travel_ok":
+			var stop: int = int(data.get("stop", -1))
+			if travel_pending and stop == pending_travel_stop:
+				_complete_travel(stop)
+			travel_pending = false
+			pending_travel_stop = -1
+		"travel_reject":
+			travel_pending = false
+			pending_travel_stop = -1
+			hud_status.text = str(data.get("reason", "Travel not available yet"))
 		"welcome":
 			network.local_id = str(data.get("id", ""))
 			current_score = int(data.get("score", 0))
@@ -687,7 +853,9 @@ func _update_hud() -> void:
 	if hud_score == null:
 		return
 	hud_score.text = "✦ %d POINTS" % current_score
-	hud_room.text = ("ROOM " + active_room) if multiplayer_mode else "PRACTICE"
+	if quest_label != null:
+		quest_label.text = "DISCOVER THE CITY  •  %d/5 ZONES" % districts_seen.size()
+	hud_room.text = ("ROOM " + active_room) if multiplayer_mode else "ADVENTURE CITY"
 	var text := "FRIENDS\n\n"
 	if not multiplayer_mode:
 		text += "%s  •  %d" % [active_alias, current_score]
@@ -699,6 +867,149 @@ func _update_hud() -> void:
 		if ranking.is_empty():
 			text += "Connecting …"
 	hud_rankings.text = text
+
+func _update_districts() -> void:
+	if not playing or local_player == null:
+		return
+	var player_pos: Vector2 = Vector2(local_player.global_position.x, local_player.global_position.z)
+	var nearby: String = "CENTRAL TOWN"
+	for zone in DISTRICTS:
+		var zone_name: String = str(zone["name"])
+		var center: Vector2 = zone["point"]
+		var radius: float = float(zone["radius"])
+		if player_pos.distance_to(center) < radius:
+			nearby = zone_name.to_upper()
+			if not districts_seen.has(zone_name):
+				districts_seen[zone_name] = true
+				if not multiplayer_mode:
+					current_score += 25
+					_play_coin_sound()
+				hud_status.text = "NEW DISTRICT! %s • +25 explore points" % zone_name if not multiplayer_mode else "Discovered %s!" % zone_name
+				_update_hud()
+			break
+	if district_label != null:
+		district_label.text = "EXPLORE  •  " + nearby
+	if action_button != null:
+		match nearby:
+			"SPLASH WATER PARK":
+				action_button.text = "SLIDE"
+			"RACING CHALLENGE":
+				action_button.text = "RACE" if not race_running else "RACING"
+			"RAINBOW OBBY":
+				action_button.text = "OBBY"
+			_:
+				action_button.text = "QUEST"
+	last_zone_name = nearby
+
+func _check_race() -> void:
+	if not race_running or local_player == null:
+		return
+	var at: Vector2 = Vector2(local_player.global_position.x, local_player.global_position.z)
+	if at.distance_to(RACE_GATES[race_gate]) < 4.5:
+		race_gate += 1
+		if race_gate >= RACE_GATES.size():
+			race_running = false
+			hud_status.text = "RACE FINISHED! %0.1f seconds" % race_time
+			if not multiplayer_mode:
+				current_score += 100
+				_play_coin_sound()
+				_update_hud()
+		else:
+			hud_status.text = "RACE  •  Checkpoint %d/%d" % [race_gate, RACE_GATES.size()]
+
+func _use_zone_action() -> void:
+	if not playing or local_player == null:
+		return
+	match last_zone_name:
+		"SPLASH WATER PARK":
+			if slide_reuse_timer + 2.0 > Time.get_ticks_msec() * 0.001:
+				return
+			slide_reuse_timer = Time.get_ticks_msec() * 0.001
+			_request_travel_to(3)
+			slide_count += 1
+			if not multiplayer_mode:
+				current_score += 20
+				_play_coin_sound()
+				_update_hud()
+			hud_status.text = "SPLASH! Water slide completed • %d splashes" % slide_count
+		"RACING CHALLENGE":
+			if not car_enabled:
+				_toggle_car()
+			race_running = true
+			race_time = 0.0
+			race_gate = 0
+			_request_travel_to(4)
+			hud_status.text = "GO! Follow the five race checkpoints within 90 seconds."
+		"RAINBOW OBBY":
+			_request_travel_to(5)
+			hud_status.text = "Rainbow Obby: jump across all the platforms to the gold flag!"
+		_:
+			hud_status.text = "QUEST: Find 5 districts, collect gems, adopt your pet and race!"
+
+func _pet_piece(parent: Node3D, where: Vector3, radius: float, color: Color) -> void:
+	var mi := MeshInstance3D.new()
+	var mesh := SphereMesh.new()
+	mesh.radius = radius
+	mesh.height = radius * 2.0
+	mesh.radial_segments = 12
+	mesh.rings = 8
+	mi.mesh = mesh
+	mi.position = where
+	mi.material_override = _material(color)
+	parent.add_child(mi)
+
+func _make_pet_companion() -> Node3D:
+	var pet := Node3D.new()
+	pet.name = "PetCompanion"
+	add_child(pet)
+	_pet_piece(pet, Vector3(0, 0.12, 0), 0.48, Color("ffc98c"))
+	_pet_piece(pet, Vector3(0, 0.44, -0.25), 0.42, Color("ffe0ab"))
+	_pet_piece(pet, Vector3(-0.34, 0.78, -0.24), 0.22, Color("cc8359"))
+	_pet_piece(pet, Vector3(0.34, 0.78, -0.24), 0.22, Color("cc8359"))
+	_pet_piece(pet, Vector3(-0.15, 0.47, -0.59), 0.075, Color("243454"))
+	_pet_piece(pet, Vector3(0.15, 0.47, -0.59), 0.075, Color("243454"))
+	_pet_piece(pet, Vector3(0, 0.31, -0.63), 0.12, Color("a85763"))
+	_pet_piece(pet, Vector3(0.1, 0.17, 0.51), 0.23, Color("f4b66d"))
+	return pet
+
+func _ride_piece(parent: Node3D, pos: Vector3, size: Vector3, color: Color) -> void:
+	var mi := MeshInstance3D.new()
+	var mesh := BoxMesh.new()
+	mesh.size = size
+	mi.mesh = mesh
+	mi.position = pos
+	mi.material_override = _material(color)
+	parent.add_child(mi)
+
+func _make_ride_shell() -> Node3D:
+	var shell := Node3D.new()
+	shell.name = "CarRide"
+	local_player.add_child(shell)
+	shell.position = Vector3(0, -0.45, 0.0)
+	_ride_piece(shell, Vector3(0, -0.26, 0), Vector3(2.4, 0.45, 1.5), Color("ed6b70"))
+	_ride_piece(shell, Vector3(0, -0.01, -0.1), Vector3(1.2, 0.55, 1.17), Color("f6ad70"))
+	_ride_piece(shell, Vector3(0, 0.12, -0.72), Vector3(0.90, 0.28, 0.12), Color("416f98"))
+	for x in [-0.78, 0.78]:
+		for z in [-0.61, 0.61]:
+			_pet_piece(shell, Vector3(x, -0.43, z), 0.34, Color("283447"))
+	return shell
+
+func _toggle_pet() -> void:
+	if not playing or local_player == null:
+		return
+	pet_enabled = not pet_enabled
+	pet_companion.visible = pet_enabled
+	pet_button.text = "PET ON" if pet_enabled else "PET"
+	hud_status.text = "Your friendly pet is following you!" if pet_enabled else "Pet returned to its garden."
+
+func _toggle_car() -> void:
+	if not playing or local_player == null:
+		return
+	car_enabled = not car_enabled
+	ride_shell.visible = car_enabled
+	local_player.speed_multiplier = 1.65 if car_enabled else 1.0
+	car_button.text = "PARK" if car_enabled else "DRIVE"
+	hud_status.text = "Driving! Explore the raceway at the eastern side." if car_enabled else "Back on foot."
 
 func _start_music() -> void:
 	music_player = AudioStreamPlayer.new()
