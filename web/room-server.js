@@ -27,7 +27,7 @@ const httpServer=http.createServer((req,res)=>{
  if(url.pathname==='/health')return replyJSON(res,200,{ok:true,game:'WonderWorld 3D Teams',maxPlayers:MAX_PLAYERS,rooms:rooms.size,noChat:true});
  if(url.pathname==='/'||url.pathname==='/game'){
   if(!fs.existsSync(gameFile))return replyJSON(res,404,{error:'Place WonderWorld_Team_3D.html beside room-server.js'});
-  res.writeHead(200,{'content-type':'text/html; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff','content-security-policy':"default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src ws: wss:; font-src 'none';"});
+  res.writeHead(200,{'content-type':'text/html; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff','content-security-policy':"default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src 'self' ws: wss:; font-src 'none';"});
   return fs.createReadStream(gameFile).pipe(res);
  }
  replyJSON(res,404,{error:'Not found'});
