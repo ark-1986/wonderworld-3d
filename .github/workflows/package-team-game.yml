@@ -31,6 +31,7 @@ jobs:
           path: |
             web/WonderWorld_Team_3D.html
             web/room-server.js
+            web/package.json
             web/START_LOCAL_WINDOWS.bat
             web/README.md
             web/THREE-LICENSE.txt
