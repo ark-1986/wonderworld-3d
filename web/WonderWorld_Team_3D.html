@@ -86,6 +86,10 @@ button,select,input{font:inherit}button{cursor:pointer;color:inherit;touch-actio
 #onlineFeedback{font-size:11px;line-height:1.4;margin-top:7px;color:#afcbdc}
 #teamPanel{position:absolute;right:181px;top:78px;min-width:135px;max-width:220px;border-radius:13px;padding:10px 12px;font-size:11px;display:flex;flex-direction:column;gap:5px}
 #teamPanel.hidden{display:none}#teamPanel b{color:#b2ffdf}#teamPanel span{white-space:normal;color:#e7f7fb}
+#shareInvite{pointer-events:auto;width:100%;padding:7px 8px;border-radius:8px;border:1px solid #6fdacc;background:#267e82;color:#fff8d4;font-size:11px;font-weight:900;cursor:pointer}
+#shareInvite:focus-visible{outline:3px solid #ffe1a1}
+@media(max-width:900px){#teamPanel{right:118px;top:54px;max-width:160px;min-width:140px;font-size:10px;padding:6px 8px}#shareInvite{font-size:9px;padding:6px 5px}}
+
 @media(max-width:900px){#onlineCard{margin-top:7px;padding:7px}#onlineTitle{font-size:11px;margin-bottom:3px}#serverUrl,#roomCode{height:30px;font-size:10px}#onlineRow button{font-size:10px;padding:4px 8px}#onlineFeedback{font-size:9px;margin-top:3px}#roomChip{display:none}#teamPanel{right:124px;top:60px;transform:scale(.8);transform-origin:top right}#menuCard{max-height:96vh}}
 @media(max-height:570px){#menuCard{padding:9px 18px}#onlineTitle{font-size:10px}#menu .menuFeatures{margin-bottom:6px}#menu .menuFeatures span{padding:4px 7px;font-size:9px}#playBtn{padding:8px;font-size:16px}#menu h2{margin-bottom:7px}#onlineCard{padding:7px 9px}#menu .menuFoot{display:none}}
 /* Online mode — the game remains independent of the server until the player opts in. */
@@ -118,7 +122,7 @@ button,select,input{font:inherit}button{cursor:pointer;color:inherit;touch-actio
       <button id="topFull" type="button" aria-label="Toggle fullscreen">⛶</button>
     </div>
   </div>
-  <div id="teamPanel" class="glass hidden"><b>👥 TEAM WORLD</b><span id="teamList">Only you</span></div>
+  <div id="teamPanel" class="glass hidden"><b>👥 TEAM WORLD</b><span id="teamList">Only you</span><button type="button" id="shareInvite" aria-label="Copy link to invite a friend into this room">📋 COPY ROOM LINK</button></div>
   <div id="questPanel" class="glass"><strong>✨ TODAY'S ADVENTURE</strong><div id="questText">Collect 5 stars for a special reward!</div><div id="zoneText">📍 Welcome Plaza</div></div>
   <div id="miniMapFrame" class="glass"><canvas id="miniMap" width="200" height="200" aria-label="Mini map"></canvas></div>
   <div id="toast" role="status" aria-live="polite"></div><div id="prompt"></div>
@@ -162,7 +166,7 @@ button,select,input{font:inherit}button{cursor:pointer;color:inherit;touch-actio
 <div id="portraitMsg"><div style="font-size:54px">📱↻</div><b>Rotate to landscape</b><p>WonderWorld was designed for wide-screen play. Rotate your device sideways to use the joystick and camera.</p></div>
 <!-- Three.js v0.160.1, MIT, copyright the three.js authors; bundled locally, no CDN. -->
 <script>/* Bundled Three.js MIT license: Copyright three.js authors. https://github.com/mrdoob/three.js/blob/master/LICENSE */
-console.warn('Scripts "build/three.js" and "build/three.min.js" are deprecated with r150+, and will be removed with r160. Please use ES Modules or alternatives: https://threejs.org/docs/index.html#manual/en/introduction/Installation'),
+void 0,
 /**
  * @license
  * Copyright 2010-2023 Three.js Authors
@@ -726,9 +730,37 @@ btnPress('onlineToggle',()=>{const c=$('onlineCard');c.classList.toggle('hidden'
 btnPress('createRoom',()=>{const code=freshRoom();$('roomCode').value=code;connectTeam(code);});
 btnPress('joinRoom',()=>connectTeam(sanitizeRoom($('roomCode').value)));
 $('roomCode').addEventListener('input',e=>e.target.value=sanitizeRoom(e.target.value));
-$('roomChip').addEventListener('click',()=>{if(online.status!=='connected')return;
- const text='WonderWorld team invite — Room: '+online.room+' | Server: '+online.server;if(navigator.clipboard?.writeText)navigator.clipboard.writeText(text).then(()=>toast('Room invite copied!')).catch(()=>toast('Room: '+online.room));else toast('Room: '+online.room);
-});
+// A room invitation includes the server/room, never credentials or personal data.
+function makeInvite(){
+ let link;
+ try{
+  const at=location.protocol==='https:'||location.protocol==='http:';
+  if(at){
+   const url=new URL(location.href);url.search='';url.hash='';
+   const localWs=(location.protocol==='https:'?'wss://':'ws://')+location.host;
+   url.searchParams.set('room',online.room);
+   if(online.server!==localWs)url.searchParams.set('server',online.server);
+   url.searchParams.set('team',online.team);
+   link=url.toString();
+  }
+ }catch(e){}
+ return link || ('WonderWorld 3D team room: '+online.room+' • Server: '+online.server+' • Team: '+online.team);
+}
+async function copyInvite(){
+ if(online.status!=='connected'){toast('Join a team world first');return;}
+ const text=makeInvite();
+ try{
+  if(!navigator.clipboard?.writeText)throw Error('Clipboard API unavailable');
+  await navigator.clipboard.writeText(text);
+  toast('Invite copied! Share it with your friends.');
+ }catch(e){
+  $('onlineFeedback').textContent='Share this invite: '+text;
+  toast('Copy room '+online.room+' and your team server address');
+ }
+}
+$('roomChip').addEventListener('click',copyInvite);
+$('shareInvite').addEventListener('click',copyInvite);
+
 window.addEventListener('keydown',e=>{
  const focused=document.activeElement;if(focused&&['INPUT','TEXTAREA'].includes(focused.tagName)){
   if(e.key==='Escape')focused.blur();return;
@@ -764,13 +796,35 @@ window.addEventListener('orientationchange',()=>{setTimeout(setRendererQuality,1
 // -------------------- MAIN GAME LOOP --------------------
 makeWorld();worldReady=true;settings.quality=save.quality;setRendererQuality();
 $('menuQuality').textContent='⚙️ QUALITY: '+(settings.quality===1?'FAST':'HIGH');
-// Automatically use the same WebSocket relay as the page when served over LAN or HTTPS.
-// Opening this single HTML file offline still works without any network.
-const autoRoomServer=(location.protocol==='https:'?'wss://':location.protocol==='http:'?'ws://':'')+location.host;
-try{const remembered=localStorage.getItem('wonderworld_team_server');
- if(remembered)$('serverUrl').value=remembered;
- else if((location.protocol==='http:'||location.protocol==='https:')&&location.host)$('serverUrl').value=autoRoomServer;
-}catch(e){if(autoRoomServer&&location.host)$('serverUrl').value=autoRoomServer;}
+// The HTML is completely offline on file://. Same-origin relay discovery is optional.
+function prepareTeamLobby(){
+ const params=new URLSearchParams(location.search);
+ const invitedServer=params.get('server')||'';
+ const invitedRoom=sanitizeRoom(params.get('room')||'');
+ const invitedTeam=params.get('team');
+ if(['Sun','Moon','Stars'].includes(invitedTeam))$('teamSelect').value=invitedTeam;
+ if(invitedRoom.length===8){
+  $('roomCode').value=invitedRoom;
+  $('onlineCard').classList.remove('hidden');
+  $('onlineFeedback').textContent='Invite found for room '+invitedRoom+'. Press JOIN to enter together.';
+ }
+ if(/^wss?:\/\/[^\s/]+/i.test(invitedServer)){
+  $('serverUrl').value=invitedServer;
+  return;
+ }
+ try{
+  const remembered=localStorage.getItem('wonderworld_team_server');
+  if(remembered && /^wss?:\/\//i.test(remembered))$('serverUrl').value=remembered;
+ }catch(e){}
+ if(location.protocol!=='http:' && location.protocol!=='https:')return;
+ fetch('/health',{cache:'no-store'}).then(r=>r.ok?r.json():null).then(info=>{
+  if(info?.game!=='WonderWorld 3D Teams'||invitedServer)return;
+  const url=(location.protocol==='https:'?'wss://':'ws://')+location.host;
+  $('serverUrl').value=url;
+  $('onlineFeedback').textContent=invitedRoom?'Room '+invitedRoom+' is ready to join.':'Team server detected. Create a room or join a friend!';
+ }).catch(()=>{});
+}
+prepareTeamLobby();
 updateCoins();drawShop('Hats');
 function renderFrame(now){requestAnimationFrame(renderFrame);const delta=Math.min(.042,Math.max(.001,(now-lastFrame)/1000));lastFrame=now;totalTime+=delta;
  if(playing&&!paused){
