@@ -1,0 +1,39 @@
+name: Test and package WonderWorld offline + online team game
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'web/**'
+      - 'render.yaml'
+      - '.github/workflows/package-team-game.yml'
+permissions:
+  contents: read
+jobs:
+  verify-web-game:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Validate standalone HTML and inline JavaScript
+        run: node web/test-html.mjs
+      - name: Test WebSocket room server with multiple player clients
+        run: node web/test-team-server.mjs
+      - name: Syntax check free local Node room relay
+        run: node --check web/room-server.js
+      - name: Package browser game, team relay, setup and license
+        uses: actions/upload-artifact@v4
+        with:
+          name: WonderWorld-3D-Offline-Online-Team-HTML
+          path: |
+            web/WonderWorld_Team_3D.html
+            web/room-server.js
+            web/START_LOCAL_WINDOWS.bat
+            web/README.md
+            web/THREE-LICENSE.txt
+            render.yaml
+          if-no-files-found: error
+          retention-days: 14
