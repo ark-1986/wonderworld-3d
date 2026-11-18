@@ -764,7 +764,13 @@ window.addEventListener('orientationchange',()=>{setTimeout(setRendererQuality,1
 // -------------------- MAIN GAME LOOP --------------------
 makeWorld();worldReady=true;settings.quality=save.quality;setRendererQuality();
 $('menuQuality').textContent='⚙️ QUALITY: '+(settings.quality===1?'FAST':'HIGH');
-try{const remembered=localStorage.getItem('wonderworld_team_server');if(remembered)$('serverUrl').value=remembered;}catch(e){}
+// Automatically use the same WebSocket relay as the page when served over LAN or HTTPS.
+// Opening this single HTML file offline still works without any network.
+const autoRoomServer=(location.protocol==='https:'?'wss://':location.protocol==='http:'?'ws://':'')+location.host;
+try{const remembered=localStorage.getItem('wonderworld_team_server');
+ if(remembered)$('serverUrl').value=remembered;
+ else if((location.protocol==='http:'||location.protocol==='https:')&&location.host)$('serverUrl').value=autoRoomServer;
+}catch(e){if(autoRoomServer&&location.host)$('serverUrl').value=autoRoomServer;}
 updateCoins();drawShop('Hats');
 function renderFrame(now){requestAnimationFrame(renderFrame);const delta=Math.min(.042,Math.max(.001,(now-lastFrame)/1000));lastFrame=now;totalTime+=delta;
  if(playing&&!paused){
