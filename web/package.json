@@ -1,0 +1,9 @@
+{
+  "name": "wonderworld-3d-team-web",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "start": "node room-server.js",
+    "test": "node test-html.mjs && node test-team-server.mjs"
+  }
+}
